@@ -1,4 +1,4 @@
-VERSION = (0, 3, 0, "b") # following PEP 386
+VERSION = (0, 3, 1, "b", 0) # following PEP 386
 DEV_N = None
 
 

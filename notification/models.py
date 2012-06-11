@@ -148,7 +148,7 @@ class Notice(models.Model):
     on_site = models.BooleanField(_("on site"))
 
     object_id = models.PositiveIntegerField(null=True, blank=True)
-    content_object = generic.GenericForeignKey("content_type", "object_id")
+    #content_object = generic.GenericForeignKey("notice_type__content_type", "object_id")
 
     objects = NoticeManager()
 
@@ -180,6 +180,9 @@ class Notice(models.Model):
     def get_absolute_url(self):
         return reverse("notification_notice", args=[str(self.pk)])
 
+    def _get_content_object(self):
+        return self.notice_type.content_type.get_object_for_this_type(id=self.object_id)
+    content_object = property(_get_content_object)
 
 class NoticeQueueBatch(models.Model):
     """
@@ -407,7 +410,7 @@ class ObservedItem(models.Model):
     user = models.ForeignKey(User, verbose_name=_("user"))
 
     object_id = models.PositiveIntegerField()
-    observed_object = generic.GenericForeignKey("content_type", "object_id")
+    #observed_object = generic.GenericForeignKey("notice_type__content_type", "object_id")
 
     notice_type = models.ForeignKey(NoticeType, verbose_name=_("notice type"))
 
@@ -427,8 +430,11 @@ class ObservedItem(models.Model):
         if extra_context is None:
             extra_context = {}
         extra_context.update({"observed": self.observed_object})
-        send([self.user], observed_object, self.notice_type.label, extra_context)
+        send(users=[self.user], object=self.observed_object, label=self.notice_type.label, extra_context=extra_context)
 
+    def _get_observed_object(self):
+        return self.notice_type.content_type.get_object_for_this_type(id=self.object_id)
+    observed_object = property(_get_observed_object)
 
 def observe(observed, observer, notice_type_label, signal="post_save"):
     """
@@ -439,7 +445,7 @@ def observe(observed, observer, notice_type_label, signal="post_save"):
     content_type = ContentType.objects.get_for_model(observed)
     notice_type = NoticeType.objects.get(label=notice_type_label, content_type=content_type)
     observed_item = ObservedItem(
-        user=observer, observed_object=observed,
+        user=observer, object_id=observed.id,
         notice_type=notice_type, signal=signal
     )
     observed_item.save()
@@ -454,13 +460,13 @@ def stop_observing(observed, observer, signal="post_save"):
     observed_item.delete()
 
 
-def send_observation_notices_for(observed, signal="post_save", extra_context=None):
+def send_observation_notices_for(observed, signal="post_save", extra_context=None, exclude_users=[]):
     """
     Send a notice for each registered user about an observed object.
     """
     if extra_context is None:
         extra_context = {}
-    observed_items = ObservedItem.objects.all_for(observed, signal)
+    observed_items = ObservedItem.objects.all_for(observed, signal).exclude(user__in=exclude_users)
     for observed_item in observed_items:
         observed_item.send_notice(extra_context)
     return observed_items

@@ -203,7 +203,6 @@ class ManageNotifications(SingleObjectTemplateResponseMixin, BaseDetailView, Bas
     content_type = None
     object_id = None
 
-    @login_required
     def dispatch(self, request, *args, **kwargs):
         self.content_type = self.get_content_type(**kwargs)
         self.object_id = self.get_object_id(**kwargs)
