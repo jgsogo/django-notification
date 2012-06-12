@@ -15,12 +15,16 @@ from django.template import Context
 from django.template.loader import render_to_string
 from django.utils.translation import ugettext_lazy as _
 from django.utils.translation import ugettext, get_language, activate
+from django.core.cache import cache
 
 from django.contrib.sites.models import Site
 from django.contrib.auth.models import User
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.contenttypes import generic
+
+from django.utils import simplejson
+from notification.json import ContentTypeJSONDecoder, ContentTypeJSONEncoder
 
 QUEUE_ALL = getattr(settings, "NOTIFICATION_QUEUE_ALL", False)
 
@@ -140,20 +144,20 @@ class Notice(models.Model):
 
     recipient = models.ForeignKey(User, related_name="recieved_notices", verbose_name=_("recipient"))
     sender = models.ForeignKey(User, null=True, related_name="sent_notices", verbose_name=_("sender"))
-    message = models.TextField(_("message"))
     notice_type = models.ForeignKey(NoticeType, verbose_name=_("notice type"))
     added = models.DateTimeField(_("added"), default=datetime.datetime.now)
     unseen = models.BooleanField(_("unseen"), default=True)
     archived = models.BooleanField(_("archived"), default=False)
     on_site = models.BooleanField(_("on site"))
 
+    pickled_data = models.TextField(null=True)
     object_id = models.PositiveIntegerField(null=True, blank=True)
     #content_object = generic.GenericForeignKey("notice_type__content_type", "object_id")
 
     objects = NoticeManager()
 
     def __unicode__(self):
-        return self.message
+        return render_to_string('notification/%s/short.html' % self.notice_type.label, {'notice': self })
 
     def archive(self):
         self.archived = True
@@ -183,6 +187,25 @@ class Notice(models.Model):
     def _get_content_object(self):
         return self.notice_type.content_type.get_object_for_this_type(id=self.object_id)
     content_object = property(_get_content_object)
+
+    def _get_cache_context(self):
+        key = 'notice_context_%s' % self.id
+        context = cache.get(key)
+        if context is None:
+            if isinstance(self.pickled_data, basestring):
+                context = simplejson.loads(self.pickled_data, cls=ContentTypeJSONDecoder)
+            cache.set(key, context, 604800)
+        return context
+    def _set_cache_context(self, value):
+        if isinstance(value, dict):
+            value_json = simplejson.dumps(value, cls=ContentTypeJSONEncoder)
+        else:
+            raise ValueError('Must be a dict')
+        self.pickled_data=value_json
+        if self.id:
+            key = 'notice_context_%s' % self.id
+            cache.set(key, value, 604800)
+    context = property(_get_cache_context, _set_cache_context)
 
 class NoticeQueueBatch(models.Model):
     """
@@ -302,48 +325,56 @@ def send_now(users, label, object=None, extra_context=None, on_site=True, sender
     ) # TODO make formats configurable
 
     for user in users:
-        recipients = []
-        # get user language for user from language store defined in
-        # NOTIFICATION_LANGUAGE_MODULE setting
-        try:
-            language = get_notification_language(user)
-        except LanguageStoreNotAvailable:
-            language = None
-
-        if language is not None:
-            # activate the user's language
-            activate(language)
-
-        # update context with user specific translations
-        context = Context({
-            "recipient": user,
-            "sender": sender,
-            "notice": ugettext(notice_type.display),
-            "notices_url": notices_url,
-            "current_site": current_site,
-            "object" : object,
-        })
-        context.update(extra_context)
-
-        # get prerendered format messages
-        messages = get_formatted_messages(formats, label, context)
-
-        # Strip newlines from subject
-        subject = "".join(render_to_string("notification/email_subject.txt", {
-            "message": messages["short.txt"],
-        }, context).splitlines())
-
-        body = render_to_string("notification/email_body.txt", {
-            "message": messages["full.txt"],
-        }, context)
-
-        notice = Notice(recipient=user, message=messages["notice.html"], notice_type=notice_type, on_site=on_site, sender=sender)
+        """ Create notification """
+        notice = Notice(recipient=user, notice_type = notice_type, on_site=on_site, sender=sender)
+        notice.context = extra_context
         if object:
             notice.object_id=object.id
         notice.save()
+
+        """ Now we only have email notification, go on only if should send email """
         if should_send(user, notice_type, "1") and user.email and user.is_active: # Email
+            recipients = []
+
+            # get user language for user from language store defined in
+            # NOTIFICATION_LANGUAGE_MODULE setting
+            try:
+                language = get_notification_language(user)
+            except LanguageStoreNotAvailable:
+                language = None
+
+            if language is not None:
+                # activate the user's language
+                activate(language)
+            else:
+                # or fall back to default
+                activate(current_language)
+
+            # update context with user specific translations
+            context = Context({
+                "recipient": user,
+                "sender": sender,
+                "notice": ugettext(notice_type.display),
+                "notices_url": notices_url,
+                "current_site": current_site,
+                "object" : object,
+                })
+            context.update(extra_context)
+
+            # get prerendered format messages
+            messages = get_formatted_messages(formats, label, context)
+
+            # Strip newlines from subject
+            subject = "".join(render_to_string("notification/email_subject.txt", {
+                "message": messages["short.txt"],
+            }, context).splitlines())
+
+            body = render_to_string("notification/email_body.txt", {
+                "message": messages["full.txt"],
+            }, context)
+
             recipients.append(user.email)
-        send_mail(subject, body, settings.DEFAULT_FROM_EMAIL, recipients)
+            send_mail(subject, body, settings.DEFAULT_FROM_EMAIL, recipients)
 
     # reset environment to original language
     activate(current_language)
@@ -429,7 +460,7 @@ class ObservedItem(models.Model):
     def send_notice(self, extra_context=None):
         if extra_context is None:
             extra_context = {}
-        extra_context.update({"observed": self.observed_object})
+        #extra_context.update({"observed": self.observed_object})
         send(users=[self.user], object=self.observed_object, label=self.notice_type.label, extra_context=extra_context)
 
     def _get_observed_object(self):

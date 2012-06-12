@@ -12,7 +12,7 @@ class NoticeSettingAdmin(admin.ModelAdmin):
 
 
 class NoticeAdmin(admin.ModelAdmin):
-    list_display = ["message", "recipient", "sender", "notice_type", "added", "unseen", "archived"]
+    list_display = ["content_object", "recipient", "sender", "notice_type", "added", "unseen", "archived"]
 
 class ObservedItemAdmin(admin.ModelAdmin):
     list_display = ["user", "observed_object", "notice_type", "signal"]
