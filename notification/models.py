@@ -94,6 +94,9 @@ def should_send(user, notice_type, medium):
 
 class NoticeManager(models.Manager):
 
+    def unseen(self):
+        return self.filter(unseen=True)
+
     def notices_for(self, user, archived=False, unseen=None, on_site=None, sent=False):
         """
         returns Notice objects for the given user.
