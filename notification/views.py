@@ -122,7 +122,7 @@ def single(request, id, mark_seen=True):
         if mark_seen and notice.unseen:
             notice.unseen = False
             notice.save()
-        return render_to_response("notification/single.html", {
+        return render_to_response(("notification/%s/notification_detail.html" % notice.notice_type.label, "notification/single.html"), {
             "notice": notice,
         }, context_instance=RequestContext(request))
     raise Http404
